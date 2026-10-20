@@ -1,0 +1,126 @@
+#!/bin/bash
+
+if type update-alternatives >/dev/null 2>&1; then
+    if [ -L '/usr/bin/grok-bot' -a -e '/usr/bin/grok-bot' -a "`readlink '/usr/bin/grok-bot'`" != '/etc/alternatives/grok-bot' ]; then
+        rm -f '/usr/bin/grok-bot'
+    fi
+    update-alternatives --install '/usr/bin/grok-bot' 'grok-bot' '/opt/Grok Bot/grok-bot' 100 || ln -sf '/opt/Grok Bot/grok-bot' '/usr/bin/grok-bot'
+else
+    ln -sf '/opt/Grok Bot/grok-bot' '/usr/bin/grok-bot'
+fi
+
+if ! { [[ -L /proc/self/ns/user ]] && unshare --user true; }; then
+    chmod 4755 '/opt/Grok Bot/chrome-sandbox' || true
+else
+    chmod 0755 '/opt/Grok Bot/chrome-sandbox' || true
+fi
+
+if hash update-mime-database 2>/dev/null; then
+    update-mime-database /usr/share/mime || true
+fi
+
+if hash update-desktop-database 2>/dev/null; then
+    update-desktop-database /usr/share/applications || true
+fi
+
+# apparmor_parser --skip-kernel-load performs every action except loading the profile into the kernel and --debug given once only checks its syntax, so this probe tells whether the installed parser accepts the bundled profile before cp -f installs it: https://manpages.debian.org/trixie/apparmor/apparmor_parser.8.en.html
+if apparmor_status --enabled > /dev/null 2>&1; then
+  APPARMOR_PROFILE_SOURCE='/opt/Grok Bot/resources/apparmor-profile'
+  APPARMOR_PROFILE_TARGET='/etc/apparmor.d/grok-bot'
+  if apparmor_parser --skip-kernel-load --debug "$APPARMOR_PROFILE_SOURCE" > /dev/null 2>&1; then
+    cp -f "$APPARMOR_PROFILE_SOURCE" "$APPARMOR_PROFILE_TARGET"
+
+    if ! { [ -x '/usr/bin/ischroot' ] && /usr/bin/ischroot; } && hash apparmor_parser 2>/dev/null; then
+      # apparmor_parser(8) advises pairing --write-cache with --skip-read-cache when the parser runs with --replace and abstractions have changed, because a cache newer than the profile is otherwise loaded instead of the file: https://manpages.debian.org/trixie/apparmor/apparmor_parser.8.en.html
+      apparmor_parser --replace --write-cache --skip-read-cache "$APPARMOR_PROFILE_TARGET"
+    fi
+  else
+    echo "Skipping the installation of the AppArmor profile as this version of AppArmor does not seem to support the bundled profile"
+  fi
+
+  # Electron fails to start where kernel.apparmor_restrict_unprivileged_userns=1, the Ubuntu 24.04 default (https://github.com/electron/electron/issues/41066), and its SUID chrome-sandbox fallback fails to execvp from an install path containing a space (https://github.com/electron/electron/issues/44414), so the check below warns when the AppArmor profile above is not loaded.
+  if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ] &&
+    ! { [ -x '/usr/bin/ischroot' ] && /usr/bin/ischroot; } &&
+    ! grep -q '^grok-bot ' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
+    if [ -f "$APPARMOR_PROFILE_TARGET" ]; then
+      echo "warning: the AppArmor profile grok-bot is not loaded and this kernel restricts unprivileged user namespaces; Grok Bot exits at launch until the profile is loaded (sudo apparmor_parser -r '$APPARMOR_PROFILE_TARGET')" >&2
+    else
+      echo "warning: this version of apparmor_parser rejected the bundled AppArmor profile and this kernel restricts unprivileged user namespaces; Grok Bot cannot start its sandbox on this kernel until the apparmor package is updated and Grok Bot is reinstalled" >&2
+    fi
+  fi
+fi
+
+dearmor_without_gpg() {
+  grep -vE '^(-----|=|$)' | base64 -d
+}
+
+# Sand gets its own suite rather than a component under stable because apt applies Signed-By to every source with the same URI and Suite and errors out when two entries disagree, even if the keyrings hold the same key: https://manpages.debian.org/trixie/apt/sources.list.5.en.html
+APT_SOURCE_PARTS=/etc/apt/sources.list.d/
+eval "$(apt-config shell APT_SOURCE_PARTS Dir::Etc::sourceparts/d 2>/dev/null)"
+GROK_BOT_SOURCES="$APT_SOURCE_PARTS"grok-bot.sources
+GROK_BOT_KEYRING=/usr/share/keyrings/grok-bot.gpg
+
+preserved_enabled_field() {
+  if grep -qiE '^Enabled:[[:space:]]*no[[:space:]]*$' "$GROK_BOT_SOURCES" 2>/dev/null; then
+    echo "Enabled: no"
+  fi
+}
+
+register_grok_bot_apt_source() {
+  mkdir -p "$APT_SOURCE_PARTS" /usr/share/keyrings &&
+    dearmor_without_gpg > "$GROK_BOT_KEYRING.tmp" <<'EOF' &&
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mQINBGhv/tgBEAC24VCTfKi5NSVaUAuSaIERf2EC5PCyOQz7WOh/UwyuG/1RB2r8
+/SYtipV+fD2b+xdu7WGPqrSHrKNNO1A9j6TtqbLVDDweJU2keHOqfIaamxrcyfCw
+3LMF9elIsmdkbZBukezWM32YBrG5MOwfCmG782sN79jYIPYckGZehh8Q6uIlZAzM
+TR7Qr6mlRR9cRZOF1gY1hRVCXQc1P3SH+ncX1abo/w3idRjxW3l0tqzjLcovWXD1
+xQdgt5odrpHlUkXRxxr7ukkPu2yJ2tL0KJydLtRDFf7k6ipYoCQv6hrFziHBHqfA
+EAMymr4YH96GhlbeP/zTSeUn8Y9Blz18q8sJJ2AKoAwpxWTYDIk7D3GDxHQYkcWI
+uh3MNJd3nulrptCOXgLBPqAF9/N1PW6UyX2XZmcFf0MQYC++IO0FwgcRw968L4Lv
+gIGJdSCA5umcadDPoCQNcdobTur0WtzrsZ8letGoZ18FAhfeWfMWfljHDPbG0LSI
+mKthaiAwXggi76sQyo374azY/ZfjepxRG3U7iEcesopqeo9p8l/8R7aZEk3zUbVt
+45yhp7XN8YtDrFvAPZfcIuoQTkeDZEub9Cch+fbeqdNk+LAyUbVzX/cFWBvRWC4a
+jsI/rD4IgeZInV39uG5ngpiwdb755xmZFiZSD1riGUYFYMfFfI1d80EOtQARAQAB
+tCVBbnlzcGhlcmUgSW5jIDxzZWN1cml0eUBhbnlzcGhlcmUuY28+iQJRBBMBCAA7
+FiEEOA/0vNw0pL2So1ZTQqF3LmLkktYFAmhv/tgCGwMFCwkIBwICIgIGFQoJCAsC
+BBYCAwECHgcCF4AACgkQQqF3LmLkktZXUw//fAEm1Vo8uQ1E/4lNToEPM24olQp6
+If49+HSwFLCB5HhsGFmed6Zx1L+iNDJ8eW8niuepIqSRTX8G/+0z487hP29moLTE
+85g/YNsgWfkptbps3vgxlStotfgXZIKI71/m7FItBiA/tMS2ZkL1UwCSUQWE1YJg
+YJ8Gm4IbvoqYNwHv+8i0wJi3/G6lphHMxQp6XuO4HVlIk0dteQPaeszFK7jf74ud
+RVTpxu+ffM0x/NFw08qYPsmBQJ9Of4/dhRfAYI9ZQOAFnIhujykOs7QBnq49JlzF
+3pYG/ZnvXwpUzRQgga+ro+5bXoQ1DZrNH+zl4EXtiXKpowUoYOZpDSELRVPGUW4v
+syi+n34M5jMnxglYQJGB/ZTW95al7c84WZANripx2szeIxKukDcln7y0Qd7jpfGI
+C7xAjTzwVK8JzsDPisP9KPfua/zifr972QMK/4xlwjRRS6yRyM7Z2QZVdtzpUdPs
+VgbnXJkb6IBQSJDXKN7LQeB5Wi+4Cg9hddAG6sPu5wIcig67qFN/GEaeu6P4SuQq
+gBhmtf0x26Y0MDBbJtQ4adHSr90F8Fn8si6/Hb5xjSSOTg9QsPbAbBpmXjblLLRm
+dhUt0JCbIrBn2+jPKL+bT7aLkXiyI/k6kNC3AbI+YYwYgIDqSpqNHbdu+t9IOHK0
+33IS4qoybKtiKbY=
+=s2ww
+-----END PGP PUBLIC KEY BLOCK-----
+EOF
+    mv -f "$GROK_BOT_KEYRING.tmp" "$GROK_BOT_KEYRING" &&
+    cat > "$GROK_BOT_SOURCES.tmp" <<EOF &&
+### THIS FILE IS AUTOMATICALLY CONFIGURED ###
+# grok-bot rewrites this file on every install and upgrade.
+# To disable the source, set Enabled: no below; that setting is kept.
+Types: deb
+URIs: https://downloads.cursor.com/aptrepo
+Suites: grok-bot
+Components: main
+Signed-By: $GROK_BOT_KEYRING
+EOF
+    preserved_enabled_field >> "$GROK_BOT_SOURCES.tmp" &&
+    mv -f "$GROK_BOT_SOURCES.tmp" "$GROK_BOT_SOURCES"
+}
+
+product_publishes_to_apt_suite() {
+  [ "Grok Bot" = "Grok Bot" ]
+}
+
+if product_publishes_to_apt_suite; then
+  if ! register_error="$(register_grok_bot_apt_source 2>&1 >/dev/null)"; then
+    rm -f "$GROK_BOT_KEYRING.tmp" "$GROK_BOT_SOURCES.tmp"
+    echo "warning: grok-bot apt source not registered ($register_error)" >&2
+  fi
+fi

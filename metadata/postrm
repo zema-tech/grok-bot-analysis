@@ -1,0 +1,29 @@
+#!/bin/bash
+
+# update-alternatives --remove <name> <path>: 'path' must be the registered alternative binary, not the generic symlink — see https://man7.org/linux/man-pages/man1/update-alternatives.1.html
+if type update-alternatives >/dev/null 2>&1; then
+    update-alternatives --remove 'grok-bot' '/opt/Grok Bot/grok-bot'
+else
+    rm -f '/usr/bin/grok-bot'
+fi
+
+APPARMOR_PROFILE_DEST='/etc/apparmor.d/grok-bot'
+
+if [ -f "$APPARMOR_PROFILE_DEST" ]; then
+  # apparmor_parser --remove unloads a definition already in the kernel and still needs the complete profile file, so it runs before the rm -f: https://manpages.debian.org/trixie/apparmor/apparmor_parser.8.en.html
+  if apparmor_status --enabled > /dev/null 2>&1; then
+    if ! { [ -x '/usr/bin/ischroot' ] && /usr/bin/ischroot; } && hash apparmor_parser 2>/dev/null; then
+      apparmor_parser --remove "$APPARMOR_PROFILE_DEST" || true
+    fi
+  fi
+  rm -f "$APPARMOR_PROFILE_DEST"
+fi
+
+# dpkg also runs postrm with upgrade, failed-upgrade, abort-upgrade, abort-install, and disappear, so removing the apt source only on remove and purge keeps a host that fails mid-upgrade on its source instead of none: https://www.debian.org/doc/debian-policy/ch-maintainerscripts.html#summary-of-ways-maintainer-scripts-are-called
+case "$1" in
+remove | purge)
+  APT_SOURCE_PARTS=/etc/apt/sources.list.d/
+  eval "$(apt-config shell APT_SOURCE_PARTS Dir::Etc::sourceparts/d 2>/dev/null)"
+  rm -f "$APT_SOURCE_PARTS"grok-bot.sources /usr/share/keyrings/grok-bot.gpg
+  ;;
+esac
