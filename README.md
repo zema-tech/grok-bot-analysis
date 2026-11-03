@@ -40,6 +40,27 @@ To recreate the parts from a `.deb`:
 ./tools/split.sh path/to/grok-bot_0.72.0_amd64.deb
 ```
 
+## Run on a cloud desktop (E2B / Ubuntu GUI)
+
+After reassembly, you can extract and launch the Electron app inside an isolated
+cloud desktop (e.g. E2B Desktop template). From the repo root:
+
+```bash
+chmod +x tools/run-on-e2b-desktop.sh
+./tools/run-on-e2b-desktop.sh
+```
+
+Background launch:
+
+```bash
+HEADLESS_LAUNCH=1 ./tools/run-on-e2b-desktop.sh
+```
+
+The script verifies/rebuilds the `.deb`, installs GTK/Electron runtime deps,
+extracts under `./extracted` (or installs to `/opt` if `INSTALL_SYSTEM=1`), starts
+Xvfb if `DISPLAY` is unset, and runs with `--no-sandbox` (typical for microVMs).
+See [STATUS.md](STATUS.md) for prep notes.
+
 ## Verify this archive
 
 Run from the repository root, in this order.
@@ -82,7 +103,9 @@ parts/
 tools/
   split.sh                split a .deb into 40 MiB parts
   reassemble.sh           rebuild and verify the .deb
+  run-on-e2b-desktop.sh   extract + launch on cloud Ubuntu desktop
 hashes.sha256             digests of all committed artifacts
+STATUS.md                 prep / launch notes
 ```
 
 The ASAR manifest records, for every entry, its path, size, SHA-256 and offset inside
@@ -94,6 +117,7 @@ the corresponding file under `app.asar.unpacked/`.
 - The 210 MB Electron runtime binary `/opt/Grok Bot/grok-bot` — hashed but not stored
   (SHA-256 `f41a171f676da01f1a126e24e9fbfeb7af6d17456e924f3f9831ec637886d79c`).
 - The extracted package tree outside `files/` and `metadata/`.
+- The reassembled `.deb` itself (rebuild with `./tools/reassemble.sh`).
 
 See [ANALYSIS.md](ANALYSIS.md) for the payload structure, dependency inventory, native
 modules, telemetry stack, install-time behaviour, and the vendor-identity discrepancies.
